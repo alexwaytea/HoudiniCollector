@@ -1,0 +1,5 @@
+{
+  "enable": true,
+  "load_package_once": true,
+  "hpath": "$HOUDINI_PACKAGE_PATH/../houdini_collector"
+}

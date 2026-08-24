@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+  <shelfSet name="houdini_collector_set" label="Collector">
+    <memberToolshelf name="houdini_collector_shelf"/>
+  </shelfSet>
+
+  <toolshelf name="houdini_collector_shelf" label="Collector">
+    <memberTool name="houdini_collector"/>
+  </toolshelf>
+
+  <tool name="houdini_collector" label="Houdini Collector" icon="BUTTONS_save">
+    <helpText><![CDATA[Inspect, relink and collect Houdini project dependencies.]]></helpText>
+    <script scriptType="python"><![CDATA[
+from houdini_collector import show
+show()
+]]></script>
+  </tool>
+</shelfDocument>
