@@ -154,6 +154,8 @@ class MegascansPlanTests(unittest.TestCase):
             self.assertFalse((output / "scene_collect.hip").exists())
             data = json.loads(result.read_text(encoding="utf-8"))
             self.assertEqual(data["collect_mode"], "report_only")
+            from houdini_collector import __version__
+            self.assertEqual(data["version"], __version__)
             self.assertIsNone(data["collected_hip"])
 
     def test_manual_asset_override_rebuilds_destination(self):
