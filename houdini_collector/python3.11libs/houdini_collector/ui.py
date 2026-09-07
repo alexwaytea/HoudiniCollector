@@ -184,7 +184,8 @@ class RelinkDialog(QtWidgets.QDialog):
 class CollectorWindow(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent or hou.qt.mainWindow())
-        self.setWindowTitle("Houdini Collector 0.3.1")
+        from . import __version__
+        self.setWindowTitle(f"Houdini Collector {__version__}")
         self.setObjectName("houdiniCollectorWindow")
         self.resize(1120, 720)
         self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)

@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import hou
 
+from . import __version__
 from .model import CollectOptions, CollectPlan, FileReference, HDAReference, RelinkCandidate
 from .paths import (
     CACHE_EXTENSIONS,
@@ -480,6 +481,109 @@ def _assign_destinations(references: List[FileReference], output_root: Path) -> 
             rel_pattern = base / raw_name
         ref.destination_pattern = "$HIP/" + rel_pattern.as_posix()
 
+    _deduplicate_texture_destinations(references, output_root)
+
+
+def _deduplicate_texture_destinations(
+    references: List[FileReference], output_root: Path,
+) -> None:
+    """Allocate one directory per resolved texture source directory.
+
+    Plan all references, including unchecked rows, so checkbox changes cannot
+    invalidate another material's paths. Keep tiles/frames together even when
+    a second reference uses only one tile or an overlapping frame range.
+    """
+    groups = {}
+    texture_ids = set()
+    for ref in references:
+        if ref.is_output or not ref.source_files:
+            continue
+        if not all(compound_suffix(path) in IMAGE_EXTENSIONS for path in ref.source_files):
+            continue
+        parents = {normalized_key(path.resolve().parent) for path in ref.source_files}
+        if len(parents) != 1:
+            raise CollectorError(
+                f"Texture sequence spans multiple source folders: {ref.raw_path}"
+            )
+        parent_key = next(iter(parents))
+        groups.setdefault(parent_key, []).append(ref)
+        texture_ids.add(id(ref))
+
+    # Reserve other dependencies so textures cannot overwrite models/caches.
+    occupied = {
+        str(dest.relative_to(output_root)).casefold(): normalized_key(source)
+        for ref in references if id(ref) not in texture_ids
+        for source, dest in zip(ref.source_files, ref.destination_files)
+    }
+    proposals = {}
+    for parent_key, refs in groups.items():
+        source_parent = Path(parent_key)
+        # Retain package-relative placement and unambiguous model ownership.
+        package_dirs = {
+            ref.destination_files[0].parent.relative_to(output_root)
+            for ref in refs if ref.category == "megascans"
+        }
+        owners = {ref.asset_name for ref in refs if ref.category == "asset_texture"}
+        overrides = {ref.asset_name for ref in refs if ref.asset_overridden}
+        if len(package_dirs) == 1:
+            base = next(iter(package_dirs))
+        elif len(owners) == 1 and all(ref.category == "asset_texture" for ref in refs):
+            base = _category_dir("asset_texture", next(iter(owners)))
+        elif len(overrides) == 1:
+            base = Path("tex") / "mats" / safe_name(next(iter(overrides)))
+        elif all(ref.category == "hdri" for ref in refs):
+            base = Path("tex") / "hdri" / safe_name(source_parent.name, "textures")
+        else:
+            # Preserve the source folder's spelling, independent of UI order.
+            folder = min(
+                (path.parent.resolve().name for ref in refs for path in ref.source_files),
+                key=lambda name: (name.casefold(), name),
+            )
+            base = Path("tex") / "mats" / safe_name(folder, "textures")
+        proposals[parent_key] = base
+
+    base_counts = {}
+    for base in proposals.values():
+        key = str(base).casefold()
+        base_counts[key] = base_counts.get(key, 0) + 1
+    allocated_dirs = set()
+    for parent_key in sorted(groups):
+        refs = groups[parent_key]
+        base = proposals[parent_key]
+        # Canonical basenames also unify Windows path case and '..' aliases.
+        sources = {
+            normalized_key(path): path.resolve()
+            for ref in refs for path in ref.source_files
+        }
+        digest = hashlib.sha256(parent_key.encode("utf-8", "replace")).hexdigest()[:12]
+        requested_base = base
+        if base_counts[str(base).casefold()] > 1:
+            base = requested_base / f"source_{digest}"
+        serial = 0
+        while (
+            str(base).casefold() in allocated_dirs
+            or any(
+                str(base / source.name).casefold() in occupied
+                and occupied[str(base / source.name).casefold()] != key
+                for key, source in sources.items()
+            )
+        ):
+            serial += 1
+            base = requested_base / f"source_{digest}_{serial}"
+        allocated_dirs.add(str(base).casefold())
+        destinations = {key: output_root / base / source.name for key, source in sources.items()}
+        for key, dest in destinations.items():
+            occupied[str(dest.relative_to(output_root)).casefold()] = key
+        for ref in refs:
+            ref.destination_files = tuple(destinations[normalized_key(path)] for path in ref.source_files)
+            raw_name = Path(ref.raw_path.replace("\\", "/")).name
+            _pattern, tokenized = tokenized_glob(raw_name)
+            if tokenized:
+                relative = base / raw_name
+            else:
+                relative = ref.destination_files[0].relative_to(output_root)
+            ref.destination_pattern = "$HIP/" + relative.as_posix()
+
 
 def assign_destinations(references: List[FileReference], output_root: Path) -> None:
     """Rebuild destinations after manual Asset group overrides."""
@@ -788,7 +892,7 @@ def _prune_scene(plan: CollectPlan) -> List[str]:
 def _manifest(plan: CollectPlan, copied: Dict[str, str], warnings: Sequence[str]) -> dict:
     return {
         "tool": "Houdini Collector",
-        "version": "0.3.1",
+        "version": __version__,
         "collect_mode": plan.collect_mode,
         "incremental_update": plan.incremental_update,
         "copy_stats": dict(plan.copy_stats),
